@@ -1,6 +1,6 @@
 Win-Firewall (Custom Personal Firewall)
 
-**Purpose:**  
+**Purpose:**
 A lightweight, Python-based personal firewall for Windows that uses WinDivert to intercept packets. Provides a simple GUI to manage allow/block rules.
 
 ---
@@ -16,7 +16,43 @@ A lightweight, Python-based personal firewall for Windows that uses WinDivert to
 ## Installation
 
 1. **Clone this repo** (or copy the files into `C:\Users\<YourName>\Documents\win-fw`):
-
    ```powershell
    git clone https://github.com/walkchris/win-fw.git
    cd win-fw
+   ```
+2. **Install Python dependencies**:
+   ```powershell
+   pip install -r requirements.txt
+   ```
+3. **Download WinDivert** from <https://reqrypt.org/windivert.html> and place `WinDivert64.sys` and `WinDivert.dll` in this directory or somewhere on your `PATH`.
+
+---
+
+## Usage
+
+### Launch the firewall
+
+Run `main.py` from an elevated command prompt:
+
+```powershell
+python main.py
+```
+
+The script loads rules from `rules.json` and logs blocked packets to `fw_log.txt`.
+
+### Launch the GUI rule editor
+
+Run the GUI to add or remove rules:
+
+```powershell
+python gui.py
+```
+
+The GUI updates the same `rules.json` file used by the firewall.
+
+---
+
+## Notes
+
+- `main.py` and `gui.py` both require administrator privileges so WinDivert can operate. Start *Command Prompt* with **Run as administrator** before launching.
+- `fw_log.txt` will be created in this directory containing a log of blocked connections.
