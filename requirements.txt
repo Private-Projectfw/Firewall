@@ -1,0 +1,3 @@
+pydivert==2.0.5
+PySimpleGUI==5.0.8.3
+

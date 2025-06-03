@@ -1,0 +1,29 @@
+[
+  {
+    "action": "block",
+    "direction": "outbound",
+    "protocol": "TCP",
+    "src_ip": "ANY",
+    "src_port": "ANY",
+    "dst_ip": "104.26.4.106",
+    "dst_port": "ANY"
+  },
+  {
+    "action": "block",
+    "direction": "outbound",
+    "protocol": "TCP",
+    "src_ip": "ANY",
+    "src_port": "ANY",
+    "dst_ip": "172.67.68.63",
+    "dst_port": "ANY"
+  },
+  {
+    "action": "block",
+    "direction": "outbound",
+    "protocol": "TCP",
+    "src_ip": "ANY",
+    "src_port": "ANY",
+    "dst_ip": "104.26.5.106",
+    "dst_port": "ANY"
+  }
+]
