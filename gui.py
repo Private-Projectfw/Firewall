@@ -7,14 +7,14 @@ RULES_FILE = "rules.json"
 def load_rules():
     if not os.path.exists(RULES_FILE):
         return []
-    with open(RULES_FILE, "r") as f:
+    with open(RULES_FILE, "r", encoding="utf-8", errors="ignore") as f:
         try:
             return json.load(f)
         except json.JSONDecodeError:
             return []
 
 def save_rules(rules):
-    with open(RULES_FILE, "w") as f:
+    with open(RULES_FILE, "w", encoding="utf-8", errors="ignore") as f:
         json.dump(rules, f, indent=2)
 
 def rule_to_display(rule):
