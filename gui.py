@@ -1,6 +1,7 @@
 import json
 import os
 import PySimpleGUI as sg
+from main import prompt_credentials, ensure_password_setup
 
 RULES_FILE = "rules.json"
 
@@ -26,6 +27,13 @@ def rule_to_display(rule):
 
 def main():
     sg.theme("DarkBlue3")
+
+    ensure_password_setup()
+    cred = prompt_credentials()
+    if not cred:
+        sg.popup("Invalid credentials")
+        return
+    user, level = cred
 
     # Load existing rules
     rules = load_rules()
@@ -68,6 +76,12 @@ def main():
             break
 
         if event == "-ADD-":
+            if level == 3:
+                sg.popup("Permission denied")
+                continue
+            if level == 2 and values["-ACTION-"] != "block":
+                sg.popup("Level 2 may only add block rules")
+                continue
             # Read inputs
             new_rule = {
                 "action": values["-ACTION-"],
@@ -86,6 +100,9 @@ def main():
             window["-RULE LIST-"].update(rule_display_list)
 
         elif event == "-DEL-":
+            if level != 1:
+                sg.popup("Only level 1 can delete rules")
+                continue
             selected = values["-RULE LIST-"]
             if selected:
                 idx = rule_display_list.index(selected[0])
