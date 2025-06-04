@@ -17,7 +17,7 @@ A lightweight, Python-based personal firewall for Windows that uses WinDivert to
 
 1. **Clone this repo** (or copy the files into `C:\Users\<YourName>\Documents\win-fw`):
    ```powershell
-   git clone https://github.com/walkchris/win-fw.git
+   git clone https://github.com/Private-Projectfw/Firewall
    cd win-fw
    ```
 2. **Install Python dependencies**:
