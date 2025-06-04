@@ -40,10 +40,11 @@ be asked whether this installation is for a **single PC** or for an
 - **Single PC** – all data stays local and the firewall locks down only this
   machine.
 - **Organization** – the first machine becomes the **Owner** and its Machine ID
-  is recorded. Additional machines may join by providing that ID together with
-  the encrypted user and rule files. Any Owner-level user can disable ChrisFW,
-  but only the Owner PC can add, remove or change accounts. Other Owner machines
-  cannot remove the original Owner.
+ - **Organization** – the first machine becomes the **Owner** and its Machine ID
+   is recorded. You will also supply a shared folder path where encrypted rule
+   and user databases are stored. Additional machines join by pointing to that
+   folder and the Owner ID. Any Owner-level user can disable ChrisFW, but only
+   the first Owner PC may add, remove or change accounts.
 
 During setup you also create the Disable‑Firewall and Recovery passwords. All
 configuration, user data, rules and logs are AES‑encrypted on disk.
@@ -72,7 +73,7 @@ permission level:
 - **3** – may add new block rules only.
 - **4** – monitor firewall logs only.
 
-Levels 2 and 3 see only a sanitized firewall log that omits IP addresses and
+Levels 2, 3 and 4 see only a sanitized firewall log that omits IP addresses and
 ports. They cannot view or open any raw files.
 
 Unusual entries in the firewall log are highlighted for quick review. Wrong
@@ -94,8 +95,9 @@ password attempts are recorded in `wrong_pw_log.txt` and only visible to level
   Only level 1 users may disable ChrisFW. Each successful disable action is logged
   in `disable_log.txt`.
 - Manage accounts from the Owner PC using `--add-user`, `--remove-user <name>` or
-  `--set-role <name> <level>`. Other machines cannot modify Owner accounts.
+`--set-role <name> <level>`. Other machines cannot modify Owner accounts.
 - Log files are checked for tampering at startup. Any modification is recorded
-  in `tamper_log.txt`.
+  in `tamper_log.txt`. In organization mode the shared folder holds the encrypted
+  user and rule files so all machines stay in sync.
 - Permission levels: **1** owner, **2** allow/block, **3** block-only,
   **4** monitor only.

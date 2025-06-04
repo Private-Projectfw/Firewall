@@ -31,6 +31,21 @@ WRONG_PW_LOG = "wrong_pw_log.txt"
 TEST_DIR = "test_files"
 
 
+def data_path(filename: str, cfg: dict | None = None) -> str:
+    """Return the absolute path for a data file respecting organization mode."""
+    if cfg is None and os.path.exists(CONFIG_FILE):
+        try:
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+    cfg = cfg or {}
+    if cfg.get("mode") == 2:
+        shared = cfg.get("shared_path")
+        if shared:
+            return os.path.join(shared, filename)
+    return filename
+
+
 def derive_key(machine_id: str) -> bytes:
     """Derive a 256-bit key from the machine id."""
     return hashlib.sha256(machine_id.encode()).digest()
@@ -83,10 +98,17 @@ def initial_setup() -> dict:
         mode = int(mode)
         break
 
+    shared_path = ""
     is_owner = True
     if mode == 2:
         ans = input("Is this the OWNER machine? (y/n): ").strip().lower()
         is_owner = ans != "n"
+        shared_path = input("Path to shared organization folder: ").strip()
+        if not shared_path:
+            print("[!] Shared folder required for organization mode.")
+            sys.exit(1)
+        if is_owner:
+            os.makedirs(shared_path, exist_ok=True)
 
     disable_pw = getpass.getpass("Create Disable-Firewall Password: ")
     if not password_complexity(disable_pw):
@@ -123,10 +145,12 @@ def initial_setup() -> dict:
     key = derive_key(machine_id)
 
     owner_id = machine_id if is_owner else input("Enter Owner machine ID: ").strip()
+    owner_key = derive_key(owner_id)
 
     cfg = {
         "mode": mode,
         "owner_id": owner_id,
+        "shared_path": shared_path,
         "disable_salt": base64.b64encode(disable_salt).decode(),
         "disable_hash": base64.b64encode(disable_hash).decode(),
         "recovery_salt": base64.b64encode(recovery_salt).decode(),
@@ -144,35 +168,21 @@ def initial_setup() -> dict:
                 "role": 1,
             }
         )
-        encrypt_json({"users": users}, USERS_FILE, key)
+        encrypt_json({"users": users}, os.path.join(shared_path, USERS_FILE) if mode == 2 else USERS_FILE, owner_key)
     else:
-        src = input(
-            "Path to owner-provided users.db.enc (leave blank for none): "
-        ).strip()
-        if src and os.path.exists(src):
-            shutil.copy(src, USERS_FILE)
-        else:
-            encrypt_json({"users": users}, USERS_FILE, key)
+        path = os.path.join(shared_path, USERS_FILE) if mode == 2 else USERS_FILE
+        if not os.path.exists(path):
+            encrypt_json({"users": users}, path, owner_key)
 
+    allow_path = os.path.join(shared_path, RULES_ALLOW_FILE) if mode == 2 else RULES_ALLOW_FILE
+    block_path = os.path.join(shared_path, RULES_BLOCK_FILE) if mode == 2 else RULES_BLOCK_FILE
     if is_owner:
-        encrypt_json([], RULES_ALLOW_FILE, key)
-        encrypt_json([], RULES_BLOCK_FILE, key)
+        encrypt_json([], allow_path, owner_key)
+        encrypt_json([], block_path, owner_key)
     else:
-        src_allow = input(
-            "Path to owner-provided rules_allow.json.enc (blank for none): "
-        ).strip()
-        if src_allow and os.path.exists(src_allow):
-            shutil.copy(src_allow, RULES_ALLOW_FILE)
-        else:
-            encrypt_json([], RULES_ALLOW_FILE, key)
-
-        src_block = input(
-            "Path to owner-provided rules_block.json.enc (blank for none): "
-        ).strip()
-        if src_block and os.path.exists(src_block):
-            shutil.copy(src_block, RULES_BLOCK_FILE)
-        else:
-            encrypt_json([], RULES_BLOCK_FILE, key)
+        for p in (allow_path, block_path):
+            if not os.path.exists(p):
+                encrypt_json([], p, owner_key)
 
     encrypt_json([], LOG_FILE, key)
 
@@ -197,14 +207,18 @@ def save_config(cfg: dict) -> None:
 
 
 def load_users() -> list:
-    key = derive_key(generate_machine_id())
-    data = decrypt_json(USERS_FILE, key)
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    path = data_path(USERS_FILE, cfg)
+    data = decrypt_json(path, key)
     return data.get("users", [])
 
 
 def save_users(users: list) -> None:
-    key = derive_key(generate_machine_id())
-    encrypt_json({"users": users}, USERS_FILE, key)
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    path = data_path(USERS_FILE, cfg)
+    encrypt_json({"users": users}, path, key)
 
 
 def add_user(current_machine: str, username: str, password: str, role: int) -> bool:
@@ -280,16 +294,18 @@ def verify_user(username: str, password: str) -> tuple[int, bool]:
 
 def load_rules() -> list:
     """Return merged allow and block rules from encrypted rule files."""
-    key = derive_key(generate_machine_id())
-    allow_rules = decrypt_json(RULES_ALLOW_FILE, key)
-    block_rules = decrypt_json(RULES_BLOCK_FILE, key)
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    allow_rules = decrypt_json(data_path(RULES_ALLOW_FILE, cfg), key)
+    block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
     return allow_rules + block_rules
 
 
 def save_rules(allow_rules: list, block_rules: list) -> None:
-    key = derive_key(generate_machine_id())
-    encrypt_json(allow_rules, RULES_ALLOW_FILE, key)
-    encrypt_json(block_rules, RULES_BLOCK_FILE, key)
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    encrypt_json(allow_rules, data_path(RULES_ALLOW_FILE, cfg), key)
+    encrypt_json(block_rules, data_path(RULES_BLOCK_FILE, cfg), key)
 
 
 def get_protocol(pkt):
@@ -378,7 +394,8 @@ def log_blocked(pkt):
         f"BLOCKED {proto} {pkt.src_addr}:{src_port} -> {pkt.dst_addr}:{dst_port}\n"
     )
 
-    key = derive_key(generate_machine_id())
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
     logs = decrypt_json(LOG_FILE, key)
     if not isinstance(logs, list):
         logs = []

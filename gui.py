@@ -131,10 +131,10 @@ def main():
 
     cfg = load_config()
     key = derive_key(cfg.get("owner_id", ""))
-    allow_rules = decrypt_json(RULES_ALLOW_FILE, key)
-    block_rules = decrypt_json(RULES_BLOCK_FILE, key)
+    allow_rules = decrypt_json(data_path(RULES_ALLOW_FILE, cfg), key)
+    block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
     rules = allow_rules + block_rules
-    sanitized_view = level in (2, 3)
+    sanitized_view = level >= 2
     tabs = [build_log_tab("Firewall Logs", LOG_FILE, sanitized=sanitized_view)]
 
     rule_tab = build_rule_tab(rules, level)
@@ -189,8 +189,8 @@ def main():
             window["-RULE LIST-"].update(rule_display_list)
 
         elif event == "-DEL-":
-            if level != 1:
-                sg.popup("Only level 1 can delete rules")
+            if level not in (1, 2):
+                sg.popup("Only level 1 or 2 can delete rules")
                 continue
             selected = values["-RULE LIST-"]
             if selected:
