@@ -32,19 +32,33 @@ A lightweight, Python-based personal firewall for Windows that uses WinDivert to
 
 ### Launch the firewall
 
-Run `main.py` from an elevated command prompt. On first run it will create
-a scheduled task so the firewall starts automatically at Windows boot. You will
-be asked whether this installation is for a **single PC** or for an
-**organization**.
+Run `main.py` from an elevated command prompt. On first run it creates
+a scheduled task so the firewall starts automatically at Windows boot and asks
+whether the installation is for a **single PC** or an **organization**.
 
-- **Single PC** – all data stays local and the firewall locks down only this
-  machine.
+- **Single PC** – all data stays local and the firewall protects only the
+  current machine.
 - **Organization** – the first machine becomes the **Owner** and its Machine ID
- - **Organization** – the first machine becomes the **Owner** and its Machine ID
-   is recorded. You will also supply a shared folder path where encrypted rule
-   and user databases are stored. Additional machines join by pointing to that
-   folder and the Owner ID. Any Owner-level user can disable ChrisFW, but only
-   the first Owner PC may add, remove or change accounts.
+  is recorded. You supply a shared folder path where encrypted rule and user
+  databases are stored. Other machines join by pointing to that folder and using
+  the Owner ID. Any Owner-level user can disable ChrisFW, but only the first
+  Owner PC may add, remove or change accounts.
+
+#### Organization mode setup
+
+1. On the first PC run `python main.py` and choose `2` for organization mode.
+   Confirm that this is the **Owner** machine when prompted.
+2. Enter a path to a **shared folder** accessible to every PC in the network.
+   The firewall stores encrypted user and rule databases here.
+3. Create the **Disable‑Firewall** and **Recovery** passwords and supply an
+   initial Owner username and password. After setup completes a file named
+   `machine_id.txt` contains this PC's machine ID.
+4. On each additional PC run `python main.py`, choose organization mode and
+   answer `n` when asked if it is the Owner machine. Provide the same shared
+   folder path and enter the machine ID from the Owner PC when prompted.
+5. From the Owner PC manage accounts using the command line options
+   `--add-user`, `--remove-user` and `--set-role`. Other PCs cannot modify
+   Owner accounts.
 
 During setup you also create the Disable‑Firewall and Recovery passwords. All
 configuration, user data, rules and logs are AES‑encrypted on disk.
