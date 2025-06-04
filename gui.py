@@ -9,6 +9,7 @@ from main import (
 LOG_FILE = "fw_log.txt"
 DISABLE_LOG = "disable_log.txt"
 TAMPER_LOG = "tamper_log.txt"
+WRONG_PW_LOG = "wrong_pw_log.txt"
 
 RULES_FILE = "rules.json"
 
@@ -45,6 +46,9 @@ def is_unusual(line: str) -> bool:
 
 
 def build_rule_tab(rules, level):
+    if level >= 4:
+        return None
+    actions = ["allow", "block"] if level in (1, 2) else ["block"]
     rule_display_list = [rule_to_display(r) for r in rules]
     rule_col = [
         [sg.Listbox(values=rule_display_list, size=(60, 10), key="-RULE LIST-", enable_events=True)],
@@ -52,7 +56,7 @@ def build_rule_tab(rules, level):
             sg.Frame(
                 "Add / Edit Rule",
                 [
-                    [sg.Text("Action"), sg.Combo(["allow", "block"], default_value="block", key="-ACTION-")],
+                    [sg.Text("Action"), sg.Combo(actions, default_value=actions[0], key="-ACTION-")],
                     [sg.Text("Direction"), sg.Combo(["outbound", "inbound"], default_value="outbound", key="-DIRECTION-")],
                     [sg.Text("Protocol"), sg.Combo(["TCP", "UDP", "ANY"], default_value="ANY", key="-PROTOCOL-")],
                     [sg.Text("Src IP"), sg.Input("ANY", size=(15, 1), key="-SRC IP-"), sg.Text("Src Port"), sg.Input("ANY", size=(5, 1), key="-SRC PORT-")],
@@ -61,7 +65,7 @@ def build_rule_tab(rules, level):
                 ],
             )]
     ]
-    return sg.Tab("Block Rules", rule_col, key="-TAB_RULES-") if level <= 2 else None
+    return sg.Tab("Rules", rule_col, key="-TAB_RULES-")
 
 
 def build_log_tab(title, path):
@@ -92,7 +96,20 @@ def build_log_tab(title, path):
 
 
 def main():
-    sg.theme("DarkGrey13")
+    custom_theme = {
+        "BACKGROUND": "#000000",
+        "TEXT": "white",
+        "INPUT": "#1A1A1A",
+        "TEXT_INPUT": "white",
+        "SCROLL": "#1A1A1A",
+        "BUTTON": ("white", "#004080"),
+        "PROGRESS": "#01826B",
+        "BORDER": "#004080",
+        "SLIDER_DEPTH": 0,
+        "PROGRESS_DEPTH": 0,
+    }
+    sg.theme_add_new("ChFuturistic", custom_theme)
+    sg.theme("ChFuturistic")
 
     ensure_password_setup()
     cred = prompt_credentials()
@@ -111,6 +128,7 @@ def main():
     if level == 1:
         tabs.append(build_log_tab("Disable Logs", DISABLE_LOG))
         tabs.append(build_log_tab("Tamper Logs", TAMPER_LOG))
+        tabs.append(build_log_tab("Wrong Passwords", WRONG_PW_LOG))
 
     layout = [
         [sg.Text(f"WELCOME {user}", font=("Helvetica", 20), justification="center")],
@@ -118,7 +136,7 @@ def main():
         [sg.Button("Exit")],
     ]
 
-    window = sg.Window("chrisfw", layout, finalize=True)
+    window = sg.Window("chrisfw", layout, finalize=True, size=(800, 600))
 
     rule_display_list = [rule_to_display(r) for r in rules]
     if rule_tab:
@@ -130,11 +148,11 @@ def main():
             break
 
         if event == "-ADD-":
-            if level == 3:
+            if level == 4:
                 sg.popup("Permission denied")
                 continue
-            if level == 2 and values["-ACTION-"] != "block":
-                sg.popup("Level 2 may only add block rules")
+            if level == 3 and values["-ACTION-"] != "block":
+                sg.popup("Level 3 may only add block rules")
                 continue
             new_rule = {
                 "action": values["-ACTION-"],
@@ -179,6 +197,9 @@ def main():
             elif tab_title == "Tamper Logs":
                 data = [[l] for l in read_log_lines(TAMPER_LOG)]
                 window["-TABLE-Tamper Logs-"].update(values=data)
+            elif tab_title == "Wrong Passwords":
+                data = [[l] for l in read_log_lines(WRONG_PW_LOG)]
+                window["-TABLE-Wrong Passwords-"].update(values=data)
 
     window.close()
 

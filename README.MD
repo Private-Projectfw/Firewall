@@ -54,12 +54,14 @@ python gui.py
 The GUI welcomes you by username and shows tabs on the left. Depending on your
 permission level:
 
-- **1** – view firewall, disable and tamper logs and add/delete rules.
-- **2** – view firewall logs and add new block rules.
-- **3** – view firewall logs only.
+- **1** – full access including all logs and rule management.
+- **2** – may add and delete allow/block rules.
+- **3** – may add new block rules only.
+- **4** – monitor firewall logs only.
 
-Unusual entries in the firewall log are highlighted for quick review. All rule
-changes still update the shared `rules.json` file.
+Unusual entries in the firewall log are highlighted for quick review. Wrong
+password attempts are recorded in `wrong_pw_log.txt` and only visible to level
+1 users. All rule changes still update the shared `rules.json` file.
 
 ---
 
@@ -78,5 +80,5 @@ changes still update the shared `rules.json` file.
   action is logged with username and timezone in `disable_log.txt`.
 - Log files are checked for tampering at startup. Any modification is recorded
   in `tamper_log.txt`.
-- Permission levels: **1** owner (full access), **2** may add block rules,
-  **3** monitor only.
+- Permission levels: **1** owner, **2** allow/block, **3** block-only,
+  **4** monitor only.

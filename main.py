@@ -21,6 +21,7 @@ PASSWORD_FILE = "password.json"
 DISABLE_LOG = "disable_log.txt"
 INTEGRITY_FILE = "log_hashes.json"
 TAMPER_LOG = "tamper_log.txt"
+WRONG_PW_LOG = "wrong_pw_log.txt"
 
 
 def load_rules():
@@ -142,6 +143,26 @@ def log_disabled(username: str) -> None:
     update_integrity(DISABLE_LOG)
 
 
+def get_local_ip() -> str:
+    """Return the local machine's IP address for logging."""
+    try:
+        import socket
+        hostname = socket.gethostname()
+        return socket.gethostbyname(hostname)
+    except Exception:
+        return "unknown"
+
+
+def log_wrong_password(username: str) -> None:
+    """Record a failed authentication attempt with IP and timestamp."""
+    now = datetime.now().astimezone()
+    ip = get_local_ip()
+    entry = f"{now:%Y-%m-%d %H:%M:%S %z} WRONG_PW {username} {ip}\n"
+    with open(WRONG_PW_LOG, "a", encoding="utf-8", errors="ignore") as f:
+        f.write(entry)
+    update_integrity(WRONG_PW_LOG)
+
+
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
     try:
@@ -182,7 +203,7 @@ def check_integrity() -> None:
                 entry = f"{now:%Y-%m-%d %H:%M:%S %z} TAMPER_DETECTED {p}\n"
                 with open(TAMPER_LOG, "a", encoding="utf-8", errors="ignore") as tf:
                     tf.write(entry)
-    for p in [LOG_FILE, DISABLE_LOG]:
+    for p in [LOG_FILE, DISABLE_LOG, WRONG_PW_LOG]:
         if os.path.exists(p):
             update_integrity(p)
 
@@ -329,12 +350,14 @@ def ensure_password_setup():
             continue
         while True:
             try:
-                level = int(input("Permission level (1=owner,2=block-only,3=monitor): ").strip())
+                level = int(input(
+                    "Permission level (1=owner,2=allow/block,3=block-only,4=monitor): "
+                ).strip())
             except ValueError:
                 print("[!] Invalid level.")
                 continue
-            if level not in (1, 2, 3):
-                print("[!] Level must be 1, 2, or 3.")
+            if level not in (1, 2, 3, 4):
+                print("[!] Level must be 1, 2, 3, or 4.")
                 continue
             break
         pub_path = input("Path to your RSA public key (PEM): ").strip()
@@ -413,6 +436,7 @@ def prompt_credentials() -> tuple[str, int] | None:
     if hmac.compare_digest(digest_u, stored_u) and hmac.compare_digest(digest_p, stored_p):
         level = int(stored_level_b.decode()) if stored_level_b else 1
         return user, level
+    log_wrong_password(user)
     return None
 
 
@@ -479,6 +503,7 @@ def main():
         open(LOG_FILE, "w", encoding="utf-8").close()
     update_integrity(LOG_FILE)
     update_integrity(DISABLE_LOG)
+    update_integrity(WRONG_PW_LOG)
 
     setup_autostart()
     threading.Thread(target=monitor_autostart, daemon=True).start()
