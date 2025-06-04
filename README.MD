@@ -33,14 +33,18 @@ A lightweight, Python-based personal firewall for Windows that uses WinDivert to
 ### Launch the firewall
 
 Run `main.py` from an elevated command prompt. On first run it will create
-a scheduled task so the firewall starts automatically at Windows boot and
-prompt you to set a username, choose a permission level and set an anti-tampering password. You must also supply your RSA public key:
+a scheduled task so the firewall starts automatically at Windows boot. The
+initial setup asks whether ChrisFW is being installed for a single PC or for
+an organization and prompts for two passwords (Disable-Firewall and Recovery).
+The first machine becomes the **Owner** and must create the initial owner
+account. All configuration, user data, rules and logs are AES‑encrypted on disk.
 
 ```powershell
 python main.py
 ```
 
-The script loads rules from `rules.json` and logs blocked packets to `fw_log.txt`.
+The script loads rules from the encrypted files `rules_allow.json.enc` and
+`rules_block.json.enc` and logs blocked packets to `fw_log.txt.enc`.
 Timestamps include your local timezone.
 
 ### Launch the GUI panel
@@ -61,23 +65,22 @@ permission level:
 
 Unusual entries in the firewall log are highlighted for quick review. Wrong
 password attempts are recorded in `wrong_pw_log.txt` and only visible to level
-1 users. All rule changes still update the shared `rules.json` file.
+1 users. Rule changes update the encrypted rule files automatically.
 
 ---
 
 ## Notes
 
 - `main.py` and `gui.py` both require administrator privileges so WinDivert can operate. Start *Command Prompt* with **Run as administrator** before launching.
-- `fw_log.txt` will be created in this directory containing a log of blocked connections.
+- `fw_log.txt.enc` will be created in this directory containing encrypted firewall logs.
 - The first run installs a scheduled task named `WinFirewall`. Delete that task via
   **Task Scheduler** if you no longer want the firewall to start automatically.
 - A background monitor recreates the scheduled task if it's removed, helping guard
   against tampering.
 - To disable the firewall and remove the task, run `python main.py --stop`. The
-  script prompts for your credentials and RSA private key. Only a level&nbsp;1
-  user can disable the firewall. Username and password hashes are salted and
-  encrypted with your public key in `password.json`. Each successful disable
-  action is logged with username and timezone in `disable_log.txt`.
+  script prompts for your username, password and the Disable-Firewall password.
+  Only level 1 users may disable ChrisFW. Each successful disable action is logged
+  in `disable_log.txt`.
 - Log files are checked for tampering at startup. Any modification is recorded
   in `tamper_log.txt`.
 - Permission levels: **1** owner, **2** allow/block, **3** block-only,

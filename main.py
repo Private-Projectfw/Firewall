@@ -9,37 +9,213 @@ import getpass
 import argparse
 import base64
 import hmac
+import uuid
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from datetime import datetime
 
 import pydivert
 
-RULES_FILE = "rules.json"
-LOG_FILE = "fw_log.txt"
-PASSWORD_FILE = "password.json"
+CONFIG_FILE = "config.json.enc"
+MACHINE_ID_FILE = "machine_id.txt"
+USERS_FILE = "users.db.enc"
+RULES_ALLOW_FILE = "rules_allow.json.enc"
+RULES_BLOCK_FILE = "rules_block.json.enc"
+LOG_FILE = "fw_log.txt.enc"
 DISABLE_LOG = "disable_log.txt"
 INTEGRITY_FILE = "log_hashes.json"
 TAMPER_LOG = "tamper_log.txt"
 WRONG_PW_LOG = "wrong_pw_log.txt"
+TEST_DIR = "test_files"
 
 
-def load_rules():
-    """
-    Load JSON rules from rules.json:
-      - action:   "allow" or "block"
-      - direction:"inbound" or "outbound"
-      - protocol: "TCP", "UDP", or "ANY"
-      - src_ip, src_port, dst_ip, dst_port: strings, "ANY" or specific
-    """
-    if not os.path.exists(RULES_FILE):
-        return []
-    with open(RULES_FILE, "r", encoding="utf-8") as f:
+def derive_key(machine_id: str) -> bytes:
+    """Derive a 256-bit key from the machine id."""
+    return hashlib.sha256(machine_id.encode()).digest()
+
+
+def encrypt_json(data: dict, path: str, key: bytes) -> None:
+    aes = AESGCM(key)
+    nonce = os.urandom(12)
+    ct = aes.encrypt(nonce, json.dumps(data).encode(), None)
+    with open(path, "wb") as f:
+        f.write(nonce + ct)
+
+
+def decrypt_json(path: str, key: bytes) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, "rb") as f:
+        blob = f.read()
+    nonce, ct = blob[:12], blob[12:]
+    aes = AESGCM(key)
+    data = aes.decrypt(nonce, ct, None)
+    return json.loads(data.decode())
+
+
+def generate_machine_id() -> str:
+    """Generate and persist a unique machine identifier."""
+    if os.path.exists(MACHINE_ID_FILE):
+        with open(MACHINE_ID_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    hw = str(uuid.getnode()).encode()
+    salt = os.urandom(16)
+    mid = hashlib.sha256(hw + salt).hexdigest()
+    with open(MACHINE_ID_FILE, "w", encoding="utf-8") as f:
+        f.write(mid)
+    return mid
+
+
+def initial_setup() -> dict:
+    """Interactive first-run setup to create config and owner credentials."""
+    if os.path.exists(CONFIG_FILE):
+        key = derive_key(generate_machine_id())
+        return decrypt_json(CONFIG_FILE, key)
+
+    print("[*] First launch: setting up ChrisFW")
+    while True:
+        mode = input("Install mode (1=single PC, 2=organization): ").strip()
+        if mode not in ("1", "2"):
+            print("[!] Enter 1 or 2")
+            continue
+        mode = int(mode)
+        break
+
+    disable_pw = getpass.getpass("Create Disable-Firewall Password: ")
+    if not password_complexity(disable_pw):
+        print("[!] Password does not meet complexity requirements.")
+        sys.exit(1)
+    disable_salt = os.urandom(16)
+    disable_hash = hashlib.pbkdf2_hmac(
+        "sha256", disable_pw.encode(), disable_salt, 200000
+    )
+
+    recovery_pw = getpass.getpass("Create Recovery Password: ")
+    if not password_complexity(recovery_pw):
+        print("[!] Password does not meet complexity requirements.")
+        sys.exit(1)
+    recovery_salt = os.urandom(16)
+    recovery_hash = hashlib.pbkdf2_hmac(
+        "sha256", recovery_pw.encode(), recovery_salt, 200000
+    )
+
+    owner_user = input("Owner username: ").strip()
+    owner_pass = getpass.getpass("Owner password: ")
+    if not password_complexity(owner_pass):
+        print("[!] Password does not meet complexity requirements.")
+        sys.exit(1)
+    owner_salt = os.urandom(16)
+    owner_hash = hashlib.pbkdf2_hmac(
+        "sha256", owner_pass.encode(), owner_salt, 200000
+    )
+
+    machine_id = generate_machine_id()
+    key = derive_key(machine_id)
+
+    cfg = {
+        "mode": mode,
+        "owner_id": machine_id,
+        "disable_salt": base64.b64encode(disable_salt).decode(),
+        "disable_hash": base64.b64encode(disable_hash).decode(),
+        "recovery_salt": base64.b64encode(recovery_salt).decode(),
+        "recovery_hash": base64.b64encode(recovery_hash).decode(),
+    }
+    encrypt_json(cfg, CONFIG_FILE, key)
+
+    users = [
+        {
+            "username": owner_user,
+            "salt": base64.b64encode(owner_salt).decode(),
+            "hash": base64.b64encode(owner_hash).decode(),
+            "role": 1,
+        }
+    ]
+    encrypt_json({"users": users}, USERS_FILE, key)
+
+    encrypt_json([], RULES_ALLOW_FILE, key)
+    encrypt_json([], RULES_BLOCK_FILE, key)
+    encrypt_json([], LOG_FILE, key)
+
+    if not os.path.exists(TEST_DIR):
+        os.makedirs(TEST_DIR, exist_ok=True)
         try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            print(f"[!] Error parsing {RULES_FILE}; using empty rule set.")
-            return []
+            os.chmod(TEST_DIR, 0o700)
+        except Exception:
+            pass
+
+    return cfg
+
+
+def load_config() -> dict:
+    key = derive_key(generate_machine_id())
+    return decrypt_json(CONFIG_FILE, key)
+
+
+def save_config(cfg: dict) -> None:
+    key = derive_key(generate_machine_id())
+    encrypt_json(cfg, CONFIG_FILE, key)
+
+
+def load_users() -> list:
+    key = derive_key(generate_machine_id())
+    data = decrypt_json(USERS_FILE, key)
+    return data.get("users", [])
+
+
+def save_users(users: list) -> None:
+    key = derive_key(generate_machine_id())
+    encrypt_json({"users": users}, USERS_FILE, key)
+
+
+def add_user(current_machine: str, username: str, password: str, role: int) -> bool:
+    """Add a user if this machine is the owner PC."""
+    cfg = load_config()
+    if cfg.get("owner_id") != current_machine:
+        print("[!] Only the Owner PC can add users.")
+        return False
+    users = load_users()
+    if any(u["username"] == username for u in users):
+        print("[!] User already exists.")
+        return False
+    salt = os.urandom(16)
+    pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200000)
+    users.append({
+        "username": username,
+        "salt": base64.b64encode(salt).decode(),
+        "hash": base64.b64encode(pw_hash).decode(),
+        "role": role,
+    })
+    save_users(users)
+    return True
+
+
+def verify_user(username: str, password: str) -> tuple[int, bool]:
+    users = load_users()
+    for u in users:
+        if u["username"] == username:
+            salt = base64.b64decode(u["salt"])
+            pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200000)
+            if hmac.compare_digest(pw_hash, base64.b64decode(u["hash"])):
+                return u.get("role", 4), True
+            else:
+                break
+    log_wrong_password(username)
+    return 0, False
+
+
+def load_rules() -> list:
+    """Return merged allow and block rules from encrypted rule files."""
+    key = derive_key(generate_machine_id())
+    allow_rules = decrypt_json(RULES_ALLOW_FILE, key)
+    block_rules = decrypt_json(RULES_BLOCK_FILE, key)
+    return allow_rules + block_rules
+
+
+def save_rules(allow_rules: list, block_rules: list) -> None:
+    key = derive_key(generate_machine_id())
+    encrypt_json(allow_rules, RULES_ALLOW_FILE, key)
+    encrypt_json(block_rules, RULES_BLOCK_FILE, key)
 
 
 def get_protocol(pkt):
@@ -128,9 +304,12 @@ def log_blocked(pkt):
         f"BLOCKED {proto} {pkt.src_addr}:{src_port} -> {pkt.dst_addr}:{dst_port}\n"
     )
 
-    # Open with UTF-8 and ignore errors
-    with open(LOG_FILE, "a", encoding="utf-8", errors="ignore") as logf:
-        logf.write(line)
+    key = derive_key(generate_machine_id())
+    logs = decrypt_json(LOG_FILE, key)
+    if not isinstance(logs, list):
+        logs = []
+    logs.append(line.strip())
+    encrypt_json(logs, LOG_FILE, key)
     update_integrity(LOG_FILE)
 
 
@@ -274,168 +453,34 @@ def password_complexity(pw: str) -> bool:
     return True
 
 
-def load_password_data():
-    if not os.path.exists(PASSWORD_FILE):
+
+def prompt_user() -> tuple[str, int] | None:
+    """Prompt for username and password and return (username, role) on success."""
+    user = input("Username: ").strip()
+    pwd = getpass.getpass("Password: ")
+    role, ok = verify_user(user, pwd)
+    if ok:
+        return user, role
+    return None
+
+
+def prompt_disable() -> str | None:
+    cfg = load_config()
+    user_data = prompt_user()
+    if not user_data:
+        print("[!] Invalid credentials.")
         return None
-    try:
-        with open(PASSWORD_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
+    user, role = user_data
+    if role != 1:
+        print("[!] Only level 1 users may disable the firewall.")
         return None
-
-
-def save_credentials(username: str, pw: str, level: int, pub_key_path: str) -> None:
-    """Hash credentials and encrypt them with the RSA public key."""
-    u_salt = os.urandom(16)
-    u_hash = hashlib.pbkdf2_hmac("sha256", username.encode(), u_salt, 200000)
-    p_salt = os.urandom(16)
-    p_hash = hashlib.pbkdf2_hmac("sha256", pw.encode(), p_salt, 200000)
-
-    with open(pub_key_path, "rb") as f:
-        public_key = serialization.load_pem_public_key(f.read())
-
-    enc_u = public_key.encrypt(
-        u_hash,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
-    enc_p = public_key.encrypt(
-        p_hash,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
-    enc_level = public_key.encrypt(
-        str(level).encode(),
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
-
-    data = {
-        "u_salt": base64.b64encode(u_salt).decode(),
-        "pw_salt": base64.b64encode(p_salt).decode(),
-        "enc_u_hash": base64.b64encode(enc_u).decode(),
-        "enc_pw_hash": base64.b64encode(enc_p).decode(),
-        "enc_level": base64.b64encode(enc_level).decode(),
-    }
-
-    with open(PASSWORD_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-
-
-def ensure_password_setup():
-    if os.path.exists(PASSWORD_FILE):
-        return
-    print("[*] Initial setup: create credentials for the --stop option.")
-    while True:
-        user = input("Create username: ").strip()
-        if not user:
-            print("[!] Username cannot be empty.")
-            continue
-        pw1 = getpass.getpass("Create password: ")
-        if not password_complexity(pw1):
-            print("[!] Password does not meet complexity requirements.")
-            continue
-        pw2 = getpass.getpass("Confirm password: ")
-        if pw1 != pw2:
-            print("[!] Passwords do not match.")
-            continue
-        while True:
-            try:
-                level = int(input(
-                    "Permission level (1=owner,2=allow/block,3=block-only,4=monitor): "
-                ).strip())
-            except ValueError:
-                print("[!] Invalid level.")
-                continue
-            if level not in (1, 2, 3, 4):
-                print("[!] Level must be 1, 2, 3, or 4.")
-                continue
-            break
-        pub_path = input("Path to your RSA public key (PEM): ").strip()
-        if not os.path.isfile(pub_path):
-            print("[!] Public key file not found.")
-            continue
-        try:
-            with open(pub_path, "rb") as f:
-                serialization.load_pem_public_key(f.read())
-        except Exception:
-            print("[!] Invalid public key file.")
-            continue
-        save_credentials(user, pw1, level, pub_path)
-        print("[*] Credentials saved.")
-        break
-
-
-def prompt_credentials() -> tuple[str, int] | None:
-    data = load_password_data()
-    if not data:
-        print("[!] No credentials set; cannot disable firewall.")
-        return None
-    key_path = input("Path to your RSA private key (PEM): ").strip()
-    if not os.path.isfile(key_path):
-        print("[!] Private key file not found.")
-        return None
-    try:
-        with open(key_path, "rb") as f:
-            private_key = serialization.load_pem_private_key(f.read(), password=None)
-    except Exception:
-        print("[!] Invalid private key file.")
-        return None
-    user = input("Enter username: ").strip()
-    if not user:
-        print("[!] Username cannot be empty.")
-        return None
-    pwd = getpass.getpass("Enter password: ")
-    if not password_complexity(pwd):
-        print("[!] Password does not meet complexity requirements.")
-        return None
-    u_salt = base64.b64decode(data["u_salt"])
-    p_salt = base64.b64decode(data["pw_salt"])
-    enc_u = base64.b64decode(data["enc_u_hash"])
-    enc_p = base64.b64decode(data["enc_pw_hash"])
-    enc_lvl = base64.b64decode(data.get("enc_level", ""))
-    try:
-        stored_u = private_key.decrypt(
-            enc_u,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
-        stored_p = private_key.decrypt(
-            enc_p,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
-        stored_level_b = private_key.decrypt(
-            enc_lvl,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        ) if enc_lvl else b"1"
-    except Exception:
-        print("[!] Failed to decrypt stored password.")
-        return None
-    digest_u = hashlib.pbkdf2_hmac("sha256", user.encode(), u_salt, 200000)
-    digest_p = hashlib.pbkdf2_hmac("sha256", pwd.encode(), p_salt, 200000)
-    if hmac.compare_digest(digest_u, stored_u) and hmac.compare_digest(digest_p, stored_p):
-        level = int(stored_level_b.decode()) if stored_level_b else 1
-        return user, level
+    pw = getpass.getpass("Disable-Firewall Password: ")
+    salt = base64.b64decode(cfg["disable_salt"])
+    stored = base64.b64decode(cfg["disable_hash"])
+    digest = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200000)
+    if hmac.compare_digest(digest, stored):
+        return user
+    print("[!] Wrong disable password.")
     log_wrong_password(user)
     return None
 
@@ -482,25 +527,21 @@ def main():
     )
     args = parser.parse_args()
 
-    ensure_password_setup()
+    cfg = initial_setup()
     check_integrity()
 
     if args.stop:
-        res = prompt_credentials()
-        if res:
-            user, level = res
-            if level != 1:
-                print("[!] Insufficient permission to disable firewall.")
-            else:
-                remove_autostart()
-                log_disabled(user)
-                print("[*] Firewall autostart removed.")
+        user = prompt_disable()
+        if user:
+            remove_autostart()
+            log_disabled(user)
+            print("[*] Firewall autostart removed.")
         else:
             print("[!] Invalid credentials; firewall remains active.")
         return
 
     if not os.path.exists(LOG_FILE):
-        open(LOG_FILE, "w", encoding="utf-8").close()
+        encrypt_json([], LOG_FILE, derive_key(generate_machine_id()))
     update_integrity(LOG_FILE)
     update_integrity(DISABLE_LOG)
     update_integrity(WRONG_PW_LOG)

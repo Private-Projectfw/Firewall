@@ -2,29 +2,23 @@ import json
 import os
 import PySimpleGUI as sg
 from main import (
-    ensure_password_setup,
-    prompt_credentials,
+    prompt_user,
+    load_config,
+    load_users,
+    save_rules,
+    load_rules,
+    derive_key,
+    encrypt_json,
+    decrypt_json,
+    RULES_ALLOW_FILE,
+    RULES_BLOCK_FILE,
+    LOG_FILE,
+    DISABLE_LOG,
+    TAMPER_LOG,
+    WRONG_PW_LOG,
 )
 
-LOG_FILE = "fw_log.txt"
-DISABLE_LOG = "disable_log.txt"
-TAMPER_LOG = "tamper_log.txt"
-WRONG_PW_LOG = "wrong_pw_log.txt"
 
-RULES_FILE = "rules.json"
-
-def load_rules():
-    if not os.path.exists(RULES_FILE):
-        return []
-    with open(RULES_FILE, "r", encoding="utf-8", errors="ignore") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return []
-
-def save_rules(rules):
-    with open(RULES_FILE, "w", encoding="utf-8", errors="ignore") as f:
-        json.dump(rules, f, indent=2)
 
 def rule_to_display(rule):
     """
@@ -36,8 +30,16 @@ def rule_to_display(rule):
 def read_log_lines(path, limit=200):
     if not os.path.exists(path):
         return []
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()[-limit:]
+    if path.endswith(".enc"):
+        key = derive_key(load_config().get("owner_id", ""))
+        try:
+            data = decrypt_json(path, key)
+        except Exception:
+            data = []
+        lines = data[-limit:]
+    else:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[-limit:]
     return [line.strip() for line in lines]
 
 
@@ -111,14 +113,17 @@ def main():
     sg.theme_add_new("ChFuturistic", custom_theme)
     sg.theme("ChFuturistic")
 
-    ensure_password_setup()
-    cred = prompt_credentials()
+    cred = prompt_user()
     if not cred:
         sg.popup("Invalid credentials")
         return
     user, level = cred
 
-    rules = load_rules()
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", ""))
+    allow_rules = decrypt_json(RULES_ALLOW_FILE, key)
+    block_rules = decrypt_json(RULES_BLOCK_FILE, key)
+    rules = allow_rules + block_rules
     tabs = [build_log_tab("Firewall Logs", LOG_FILE)]
 
     rule_tab = build_rule_tab(rules, level)
@@ -164,7 +169,11 @@ def main():
                 "dst_port": values["-DST PORT-"].strip() or "ANY",
             }
             rules.append(new_rule)
-            save_rules(rules)
+            if new_rule["action"] == "allow":
+                allow_rules.append(new_rule)
+            else:
+                block_rules.append(new_rule)
+            save_rules(allow_rules, block_rules)
             rule_display_list.append(rule_to_display(new_rule))
             window["-RULE LIST-"].update(rule_display_list)
 
@@ -175,9 +184,13 @@ def main():
             selected = values["-RULE LIST-"]
             if selected:
                 idx = rule_display_list.index(selected[0])
-                del rules[idx]
+                rule = rules.pop(idx)
                 del rule_display_list[idx]
-                save_rules(rules)
+                if rule["action"] == "allow":
+                    allow_rules.remove(rule)
+                else:
+                    block_rules.remove(rule)
+                save_rules(allow_rules, block_rules)
                 window["-RULE LIST-"].update(rule_display_list)
 
         elif event.startswith("-REFRESH-"):
