@@ -27,7 +27,7 @@ def rule_to_display(rule):
     """
     return f"[{rule['action'].upper()}][{rule['direction']}][{rule['protocol']}][{rule['src_ip']}:{rule['src_port']} → {rule['dst_ip']}:{rule['dst_port']}]"
 
-def read_log_lines(path, limit=200):
+def read_log_lines(path, limit=200, sanitized=False):
     if not os.path.exists(path):
         return []
     if path.endswith(".enc"):
@@ -40,7 +40,17 @@ def read_log_lines(path, limit=200):
     else:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()[-limit:]
-    return [line.strip() for line in lines]
+    lines = [line.strip() for line in lines]
+    if sanitized:
+        redacted = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 3:
+                redacted.append(" ".join(parts[:3]) + " ...")
+            else:
+                redacted.append("...")
+        return redacted
+    return lines
 
 
 def is_unusual(line: str) -> bool:
@@ -70,8 +80,8 @@ def build_rule_tab(rules, level):
     return sg.Tab("Rules", rule_col, key="-TAB_RULES-")
 
 
-def build_log_tab(title, path):
-    lines = read_log_lines(path)
+def build_log_tab(title, path, sanitized=False):
+    lines = read_log_lines(path, sanitized=sanitized)
     table_data = [[line] for line in lines]
     colors = [
         (i, "yellow", None)
@@ -124,7 +134,8 @@ def main():
     allow_rules = decrypt_json(RULES_ALLOW_FILE, key)
     block_rules = decrypt_json(RULES_BLOCK_FILE, key)
     rules = allow_rules + block_rules
-    tabs = [build_log_tab("Firewall Logs", LOG_FILE)]
+    sanitized_view = level in (2, 3)
+    tabs = [build_log_tab("Firewall Logs", LOG_FILE, sanitized=sanitized_view)]
 
     rule_tab = build_rule_tab(rules, level)
     if rule_tab:
@@ -196,7 +207,7 @@ def main():
         elif event.startswith("-REFRESH-"):
             tab_title = event.replace("-REFRESH-", "")
             if tab_title == "Firewall Logs":
-                lines = read_log_lines(LOG_FILE)
+                lines = read_log_lines(LOG_FILE, sanitized=sanitized_view)
                 data = [[l] for l in lines]
                 colors = [
                     (i, "yellow", None)

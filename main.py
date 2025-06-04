@@ -10,6 +10,7 @@ import argparse
 import base64
 import hmac
 import uuid
+import shutil
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -82,6 +83,11 @@ def initial_setup() -> dict:
         mode = int(mode)
         break
 
+    is_owner = True
+    if mode == 2:
+        ans = input("Is this the OWNER machine? (y/n): ").strip().lower()
+        is_owner = ans != "n"
+
     disable_pw = getpass.getpass("Create Disable-Firewall Password: ")
     if not password_complexity(disable_pw):
         print("[!] Password does not meet complexity requirements.")
@@ -100,22 +106,27 @@ def initial_setup() -> dict:
         "sha256", recovery_pw.encode(), recovery_salt, 200000
     )
 
-    owner_user = input("Owner username: ").strip()
-    owner_pass = getpass.getpass("Owner password: ")
-    if not password_complexity(owner_pass):
-        print("[!] Password does not meet complexity requirements.")
-        sys.exit(1)
-    owner_salt = os.urandom(16)
-    owner_hash = hashlib.pbkdf2_hmac(
-        "sha256", owner_pass.encode(), owner_salt, 200000
-    )
-
+    owner_user = None
+    owner_pass = None
+    if is_owner:
+        owner_user = input("Owner username: ").strip()
+        owner_pass = getpass.getpass("Owner password: ")
+        if not password_complexity(owner_pass):
+            print("[!] Password does not meet complexity requirements.")
+            sys.exit(1)
+        owner_salt = os.urandom(16)
+        owner_hash = hashlib.pbkdf2_hmac(
+            "sha256", owner_pass.encode(), owner_salt, 200000
+        )
+    
     machine_id = generate_machine_id()
     key = derive_key(machine_id)
 
+    owner_id = machine_id if is_owner else input("Enter Owner machine ID: ").strip()
+
     cfg = {
         "mode": mode,
-        "owner_id": machine_id,
+        "owner_id": owner_id,
         "disable_salt": base64.b64encode(disable_salt).decode(),
         "disable_hash": base64.b64encode(disable_hash).decode(),
         "recovery_salt": base64.b64encode(recovery_salt).decode(),
@@ -123,18 +134,46 @@ def initial_setup() -> dict:
     }
     encrypt_json(cfg, CONFIG_FILE, key)
 
-    users = [
-        {
-            "username": owner_user,
-            "salt": base64.b64encode(owner_salt).decode(),
-            "hash": base64.b64encode(owner_hash).decode(),
-            "role": 1,
-        }
-    ]
-    encrypt_json({"users": users}, USERS_FILE, key)
+    users = []
+    if is_owner:
+        users.append(
+            {
+                "username": owner_user,
+                "salt": base64.b64encode(owner_salt).decode(),
+                "hash": base64.b64encode(owner_hash).decode(),
+                "role": 1,
+            }
+        )
+        encrypt_json({"users": users}, USERS_FILE, key)
+    else:
+        src = input(
+            "Path to owner-provided users.db.enc (leave blank for none): "
+        ).strip()
+        if src and os.path.exists(src):
+            shutil.copy(src, USERS_FILE)
+        else:
+            encrypt_json({"users": users}, USERS_FILE, key)
 
-    encrypt_json([], RULES_ALLOW_FILE, key)
-    encrypt_json([], RULES_BLOCK_FILE, key)
+    if is_owner:
+        encrypt_json([], RULES_ALLOW_FILE, key)
+        encrypt_json([], RULES_BLOCK_FILE, key)
+    else:
+        src_allow = input(
+            "Path to owner-provided rules_allow.json.enc (blank for none): "
+        ).strip()
+        if src_allow and os.path.exists(src_allow):
+            shutil.copy(src_allow, RULES_ALLOW_FILE)
+        else:
+            encrypt_json([], RULES_ALLOW_FILE, key)
+
+        src_block = input(
+            "Path to owner-provided rules_block.json.enc (blank for none): "
+        ).strip()
+        if src_block and os.path.exists(src_block):
+            shutil.copy(src_block, RULES_BLOCK_FILE)
+        else:
+            encrypt_json([], RULES_BLOCK_FILE, key)
+
     encrypt_json([], LOG_FILE, key)
 
     if not os.path.exists(TEST_DIR):

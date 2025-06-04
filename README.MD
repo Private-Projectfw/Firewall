@@ -33,11 +33,19 @@ A lightweight, Python-based personal firewall for Windows that uses WinDivert to
 ### Launch the firewall
 
 Run `main.py` from an elevated command prompt. On first run it will create
-a scheduled task so the firewall starts automatically at Windows boot. The
-initial setup asks whether ChrisFW is being installed for a single PC or for
-an organization and prompts for two passwords (Disable-Firewall and Recovery).
-The first machine becomes the **Owner** and must create the initial owner
-account. All configuration, user data, rules and logs are AES‑encrypted on disk.
+a scheduled task so the firewall starts automatically at Windows boot. You will
+be asked whether this installation is for a **single PC** or for an
+**organization**.
+
+- **Single PC** – all data stays local and the firewall locks down only this
+  machine.
+- **Organization** – the first machine becomes the **Owner**. Additional
+  machines may join by providing the owner machine ID and copies of the
+  encrypted user and rule files. Only the Owner PC can manage users and disable
+  ChrisFW.
+
+During setup you also create the Disable‑Firewall and Recovery passwords. All
+configuration, user data, rules and logs are AES‑encrypted on disk.
 
 ```powershell
 python main.py
@@ -62,6 +70,9 @@ permission level:
 - **2** – may add and delete allow/block rules.
 - **3** – may add new block rules only.
 - **4** – monitor firewall logs only.
+
+Levels 2 and 3 see only a sanitized firewall log that omits IP addresses and
+ports. They cannot view or open any raw files.
 
 Unusual entries in the firewall log are highlighted for quick review. Wrong
 password attempts are recorded in `wrong_pw_log.txt` and only visible to level
