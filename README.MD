@@ -43,15 +43,23 @@ python main.py
 The script loads rules from `rules.json` and logs blocked packets to `fw_log.txt`.
 Timestamps include your local timezone.
 
-### Launch the GUI rule editor
+### Launch the GUI panel
 
-Run the GUI to add or remove rules:
+Run the redesigned GUI to manage rules and view logs:
 
 ```powershell
 python gui.py
 ```
 
-The GUI updates the same `rules.json` file used by the firewall.
+The GUI welcomes you by username and shows tabs on the left. Depending on your
+permission level:
+
+- **1** – view firewall, disable and tamper logs and add/delete rules.
+- **2** – view firewall logs and add new block rules.
+- **3** – view firewall logs only.
+
+Unusual entries in the firewall log are highlighted for quick review. All rule
+changes still update the shared `rules.json` file.
 
 ---
 
