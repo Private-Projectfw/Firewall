@@ -229,6 +229,41 @@ def add_user(current_machine: str, username: str, password: str, role: int) -> b
     return True
 
 
+def remove_user(current_machine: str, username: str) -> bool:
+    """Remove a user if this machine is the owner PC."""
+    cfg = load_config()
+    if cfg.get("owner_id") != current_machine:
+        print("[!] Only the Owner PC can remove users.")
+        return False
+    users = load_users()
+    for u in users:
+        if u["username"] == username:
+            users.remove(u)
+            save_users(users)
+            return True
+    print("[!] User not found.")
+    return False
+
+
+def set_user_role(current_machine: str, username: str, role: int) -> bool:
+    """Change a user's role if this machine is the owner PC."""
+    cfg = load_config()
+    if cfg.get("owner_id") != current_machine:
+        print("[!] Only the Owner PC can change roles.")
+        return False
+    if role not in (1, 2, 3, 4):
+        print("[!] Invalid role.")
+        return False
+    users = load_users()
+    for u in users:
+        if u["username"] == username:
+            u["role"] = role
+            save_users(users)
+            return True
+    print("[!] User not found.")
+    return False
+
+
 def verify_user(username: str, password: str) -> tuple[int, bool]:
     users = load_users()
     for u in users:
@@ -564,10 +599,66 @@ def main():
         action="store_true",
         help="Disable firewall and remove autostart (requires password)",
     )
+    parser.add_argument(
+        "--add-user",
+        action="store_true",
+        help="Add a user (Owner PC only)",
+    )
+    parser.add_argument(
+        "--remove-user",
+        metavar="USERNAME",
+        help="Remove a user (Owner PC only)",
+    )
+    parser.add_argument(
+        "--set-role",
+        nargs=2,
+        metavar=("USERNAME", "LEVEL"),
+        help="Change user's role (Owner PC only)",
+    )
     args = parser.parse_args()
 
     cfg = initial_setup()
     check_integrity()
+
+    current_machine = generate_machine_id()
+
+    if args.add_user or args.remove_user or args.set_role:
+        cred = prompt_user()
+        if not cred:
+            print("[!] Invalid credentials.")
+            return
+        user, role = cred
+        if role != 1 or current_machine != cfg.get("owner_id"):
+            print("[!] Only an Owner on the Owner PC may manage users.")
+            return
+        if args.add_user:
+            new_user = input("New username: ").strip()
+            pw = getpass.getpass("New password: ")
+            if not password_complexity(pw):
+                print("[!] Password does not meet complexity requirements.")
+                return
+            try:
+                lvl = int(input("Role (1=Owner,2=Admin,3=Block,4=Monitor): "))
+            except ValueError:
+                print("[!] Invalid role.")
+                return
+            if add_user(current_machine, new_user, pw, lvl):
+                print("[*] User added.")
+            return
+        if args.remove_user:
+            if remove_user(current_machine, args.remove_user):
+                print("[*] User removed.")
+            return
+        if args.set_role:
+            uname, lvl_str = args.set_role
+            try:
+                lvl = int(lvl_str)
+            except ValueError:
+                print("[!] Invalid role.")
+                return
+            if set_user_role(current_machine, uname, lvl):
+                print("[*] Role updated.")
+            return
 
     if args.stop:
         user = prompt_disable()

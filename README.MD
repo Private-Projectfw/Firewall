@@ -39,10 +39,11 @@ be asked whether this installation is for a **single PC** or for an
 
 - **Single PC** – all data stays local and the firewall locks down only this
   machine.
-- **Organization** – the first machine becomes the **Owner**. Additional
-  machines may join by providing the owner machine ID and copies of the
-  encrypted user and rule files. Only the Owner PC can manage users and disable
-  ChrisFW.
+- **Organization** – the first machine becomes the **Owner** and its Machine ID
+  is recorded. Additional machines may join by providing that ID together with
+  the encrypted user and rule files. Any Owner-level user can disable ChrisFW,
+  but only the Owner PC can add, remove or change accounts. Other Owner machines
+  cannot remove the original Owner.
 
 During setup you also create the Disable‑Firewall and Recovery passwords. All
 configuration, user data, rules and logs are AES‑encrypted on disk.
@@ -92,6 +93,8 @@ password attempts are recorded in `wrong_pw_log.txt` and only visible to level
   script prompts for your username, password and the Disable-Firewall password.
   Only level 1 users may disable ChrisFW. Each successful disable action is logged
   in `disable_log.txt`.
+- Manage accounts from the Owner PC using `--add-user`, `--remove-user <name>` or
+  `--set-role <name> <level>`. Other machines cannot modify Owner accounts.
 - Log files are checked for tampering at startup. Any modification is recorded
   in `tamper_log.txt`.
 - Permission levels: **1** owner, **2** allow/block, **3** block-only,
