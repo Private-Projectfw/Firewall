@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import threading
 from datetime import datetime
 import PySimpleGUI as sg
 from main import (
@@ -22,6 +23,8 @@ from main import (
     WRONG_PW_LOG,
     TRAFFIC_LOG,
     add_timed_block,
+    add_timed_allow,
+    add_quarantine,
 )
 
 
@@ -35,8 +38,9 @@ def rule_to_display(rule):
     if rule.get("expires"):
         exp_time = datetime.fromtimestamp(rule["expires"]).strftime("%H:%M")
         exp = f" until {exp_time}"
+    q = "Q" if rule.get("quarantine") else ""
     return (
-        f"[{rule['action'].upper()}][{rule['direction']}][{rule['src_ip']} -> {rule['dst_ip']}]" + exp
+        f"[{rule['action'].upper()}{q}][{rule['direction']}][{rule['src_ip']} -> {rule['dst_ip']}]" + exp
     )
 
 def read_log_lines(path, limit=200, sanitized=False):
@@ -103,7 +107,13 @@ def build_log_tab(title, path, sanitized=False):
     ]
     buttons = [sg.Button("Refresh", key=f"-REFRESH-{title}-")]
     if title == "Traffic":
-        buttons.append(sg.Button("Block 1h", key="-BLOCK1H-"))
+        buttons.extend(
+            [
+                sg.Button("Block 1h", key="-BLOCK1H-"),
+                sg.Button("Allow 1h", key="-ALLOW1H-"),
+                sg.Button("Quarantine 1h", key="-QUAR1H-"),
+            ]
+        )
     tab_layout = [
         [
             sg.Table(
@@ -164,12 +174,28 @@ def main():
         tabs.append(build_log_tab("Wrong Passwords", WRONG_PW_LOG))
 
     layout = [
-        [sg.Text(f"WELCOME {user}", font=("Helvetica", 20), justification="center")],
+        [sg.Text(f"Welcome {user}", font=("Helvetica", 20), justification="center")],
+        [sg.Text("", key="-ALERT-", visible=False, background_color="#FF4444", text_color="white", expand_x=True, justification="center")],
         [sg.TabGroup([[t for t in tabs if t]], tab_location="left", title_color="cyan", border_width=2, key="-TABS-")],
         [sg.Button("Exit")],
     ]
 
     window = sg.Window("chrisfw", layout, finalize=True, size=(800, 600))
+
+    stop_event = threading.Event()
+
+    def watch_traffic():
+        last = 0
+        while not stop_event.is_set():
+            lines = read_log_lines(TRAFFIC_LOG)
+            if len(lines) > last:
+                for line in lines[last:]:
+                    if "AI-FLAGGED" in line or "BLOCKED" in line:
+                        window.write_event_value("-NEW_ALERT-", line)
+                last = len(lines)
+            time.sleep(1)
+
+    threading.Thread(target=watch_traffic, daemon=True).start()
 
     rule_display_list = [rule_to_display(r) for r in rules]
     if rule_tab:
@@ -265,6 +291,31 @@ def main():
                     add_timed_block(dst, 3600)
                     sg.popup(f"Blocking {dst} for 1 hour")
 
+        elif event == "-ALLOW1H-":
+            selected = values.get("-TABLE-Traffic-")
+            if selected:
+                line = selected[0]
+                parts = line.split()
+                if len(parts) >= 6:
+                    dst = parts[5].split(':')[0]
+                    add_timed_allow(dst, 3600)
+                    sg.popup(f"Allowing {dst} for 1 hour")
+
+        elif event == "-QUAR1H-":
+            selected = values.get("-TABLE-Traffic-")
+            if selected:
+                line = selected[0]
+                parts = line.split()
+                if len(parts) >= 6:
+                    dst = parts[5].split(':')[0]
+                    add_quarantine(dst, 3600)
+                    sg.popup(f"Quarantining {dst} for 1 hour")
+
+        elif event == "-NEW_ALERT-":
+            msg = values.get(event, "")
+            window["-ALERT-"].update(msg, visible=True)
+
+    stop_event.set()
     window.close()
 
 if __name__ == "__main__":

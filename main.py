@@ -351,6 +351,47 @@ def add_timed_block(ip: str, duration: int = 3600) -> None:
     save_rules(allow_rules, block_rules)
 
 
+def add_timed_allow(ip: str, duration: int = 3600) -> None:
+    """Add a temporary allow rule for the given destination IP."""
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    allow_rules = decrypt_json(data_path(RULES_ALLOW_FILE, cfg), key)
+    block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
+    rule = {
+        "action": "allow",
+        "direction": "outbound",
+        "protocol": "ANY",
+        "src_ip": "ANY",
+        "src_port": "ANY",
+        "dst_ip": ip,
+        "dst_port": "ANY",
+        "expires": time.time() + duration,
+    }
+    allow_rules.append(rule)
+    save_rules(allow_rules, block_rules)
+
+
+def add_quarantine(ip: str, duration: int = 3600) -> None:
+    """Add a quarantine block rule (marked) for the IP."""
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    allow_rules = decrypt_json(data_path(RULES_ALLOW_FILE, cfg), key)
+    block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
+    rule = {
+        "action": "block",
+        "direction": "outbound",
+        "protocol": "ANY",
+        "src_ip": "ANY",
+        "src_port": "ANY",
+        "dst_ip": ip,
+        "dst_port": "ANY",
+        "expires": time.time() + duration,
+        "quarantine": True,
+    }
+    block_rules.append(rule)
+    save_rules(allow_rules, block_rules)
+
+
 def get_protocol(pkt):
     """
     Return "TCP" if this packet has a TCP header,
@@ -362,6 +403,50 @@ def get_protocol(pkt):
     if pkt.udp is not None:
         return "UDP"
     return "OTHER"
+
+
+def detect_layer(pkt) -> int:
+    """Rudimentary layer detection based on ports and payload."""
+    if pkt.tcp:
+        port = pkt.tcp.dst_port if pkt.is_outbound else pkt.tcp.src_port
+        if port in (80, 8080, 8000, 8888):
+            return 7
+        if port == 443:
+            return 6
+    if pkt.udp:
+        port = pkt.udp.dst_port if pkt.is_outbound else pkt.udp.src_port
+        if port == 53:
+            return 7
+    return 4
+
+
+def extract_domain(pkt) -> str | None:
+    """Attempt to pull domain from HTTP Host header."""
+    if pkt.tcp and pkt.payload:
+        port = pkt.tcp.dst_port if pkt.is_outbound else pkt.tcp.src_port
+        if port in (80, 8080, 8000, 8888):
+            try:
+                data = bytes(pkt.payload).decode(errors="ignore")
+                for line in data.splitlines():
+                    if line.lower().startswith("host:"):
+                        return line.split(":", 1)[1].strip()
+            except Exception:
+                pass
+    return None
+
+
+MALICIOUS_INDICATORS = {"malware", "phishing", "badexample.com"}
+
+
+def ai_analyze(target: str) -> tuple[bool, float]:
+    """Very basic heuristic 'AI' check."""
+    if not target:
+        return False, 0.0
+    lower = target.lower()
+    for word in MALICIOUS_INDICATORS:
+        if word in lower:
+            return True, 0.95
+    return False, 0.05
 
 
 def packet_matches_rule(pkt, rule):
@@ -445,11 +530,13 @@ def log_blocked(pkt):
     logs.append(line.strip())
     encrypt_json(logs, local_path(LOG_FILE), key)
     update_integrity(local_path(LOG_FILE))
-    log_traffic(pkt, "BLOCKED")
+    layer = detect_layer(pkt)
+    domain = extract_domain(pkt)
+    log_traffic(pkt, "BLOCKED", layer, domain)
 
 
-def log_traffic(pkt, action: str) -> None:
-    """Log every packet with ALLOWED or BLOCKED status."""
+def log_traffic(pkt, action: str, layer: int = 4, dest: str | None = None, username: str | None = None) -> None:
+    """Log every packet with ALLOWED/BLOCKED/AI-FLAGGED status."""
     proto = get_protocol(pkt)
     if proto == "TCP":
         src_port = pkt.tcp.src_port
@@ -462,9 +549,11 @@ def log_traffic(pkt, action: str) -> None:
         dst_port = 0
 
     now = datetime.now().astimezone()
+    user = username or os.getenv("USERNAME", "unknown")
+    dest = dest or str(pkt.dst_addr)
     line = (
-        f"{now:%Y-%m-%d %H:%M:%S %z} "
-        f"{action} {proto} {pkt.src_addr}:{src_port} -> {pkt.dst_addr}:{dst_port}"
+        f"{now:%Y-%m-%d %H:%M:%S.%f %z} "
+        f"{user} {action} L{layer} {proto} {pkt.src_addr}:{src_port} -> {dest}:{dst_port}"
     )
 
     cfg = load_config()
@@ -675,13 +764,23 @@ def firewall_loop():
                     except Exception:
                         break
 
+                    domain = extract_domain(pkt)
+                    layer = detect_layer(pkt)
+                    malicious, score = ai_analyze(domain or str(pkt.dst_addr))
+
                     rules = load_rules()
+                    if malicious:
+                        log_traffic(pkt, f"AI-FLAGGED({score:.2f})", layer, domain)
+                        add_quarantine(str(pkt.dst_addr), 3600)
+                        print(f"WARNING: {os.getenv('USERNAME','user')} to {domain or pkt.dst_addr} L{layer} flagged malicious {score:.0%}")
+                        continue
+
                     if should_block(pkt, rules):
                         log_blocked(pkt)
                         continue
                     else:
                         w.send(pkt)
-                        log_traffic(pkt, "ALLOWED")
+                        log_traffic(pkt, "ALLOWED", layer, domain)
                         print(f"ALLOWED {pkt.src_addr}->{pkt.dst_addr}")
         except Exception as e:
             print(f"[!] Firewall error: {e}; restarting...")
