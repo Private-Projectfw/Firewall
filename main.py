@@ -16,6 +16,12 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from datetime import datetime
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def local_path(name: str) -> str:
+    return os.path.join(BASE_DIR, name)
+
 import pydivert
 
 CONFIG_FILE = "config.json.enc"
@@ -24,6 +30,7 @@ USERS_FILE = "users.db.enc"
 RULES_ALLOW_FILE = "rules_allow.json.enc"
 RULES_BLOCK_FILE = "rules_block.json.enc"
 LOG_FILE = "fw_log.txt.enc"
+TRAFFIC_LOG = "traffic_log.txt.enc"
 DISABLE_LOG = "disable_log.txt"
 INTEGRITY_FILE = "log_hashes.json"
 TAMPER_LOG = "tamper_log.txt"
@@ -33,7 +40,7 @@ TEST_DIR = "test_files"
 
 def data_path(filename: str, cfg: dict | None = None) -> str:
     """Return the absolute path for a data file respecting organization mode."""
-    if cfg is None and os.path.exists(CONFIG_FILE):
+    if cfg is None and os.path.exists(local_path(CONFIG_FILE)):
         try:
             cfg = load_config()
         except Exception:
@@ -43,7 +50,7 @@ def data_path(filename: str, cfg: dict | None = None) -> str:
         shared = cfg.get("shared_path")
         if shared:
             return os.path.join(shared, filename)
-    return filename
+    return local_path(filename)
 
 
 def derive_key(machine_id: str) -> bytes:
@@ -72,22 +79,23 @@ def decrypt_json(path: str, key: bytes) -> dict:
 
 def generate_machine_id() -> str:
     """Generate and persist a unique machine identifier."""
-    if os.path.exists(MACHINE_ID_FILE):
-        with open(MACHINE_ID_FILE, "r", encoding="utf-8") as f:
+    path = local_path(MACHINE_ID_FILE)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
             return f.read().strip()
     hw = str(uuid.getnode()).encode()
     salt = os.urandom(16)
     mid = hashlib.sha256(hw + salt).hexdigest()
-    with open(MACHINE_ID_FILE, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(mid)
     return mid
 
 
 def initial_setup() -> dict:
     """Interactive first-run setup to create config and owner credentials."""
-    if os.path.exists(CONFIG_FILE):
+    if os.path.exists(local_path(CONFIG_FILE)):
         key = derive_key(generate_machine_id())
-        return decrypt_json(CONFIG_FILE, key)
+        return decrypt_json(local_path(CONFIG_FILE), key)
 
     print("[*] First launch: setting up ChrisFW")
     while True:
@@ -156,7 +164,7 @@ def initial_setup() -> dict:
         "recovery_salt": base64.b64encode(recovery_salt).decode(),
         "recovery_hash": base64.b64encode(recovery_hash).decode(),
     }
-    encrypt_json(cfg, CONFIG_FILE, key)
+    encrypt_json(cfg, local_path(CONFIG_FILE), key)
 
     users = []
     if is_owner:
@@ -168,14 +176,14 @@ def initial_setup() -> dict:
                 "role": 1,
             }
         )
-        encrypt_json({"users": users}, os.path.join(shared_path, USERS_FILE) if mode == 2 else USERS_FILE, owner_key)
+        encrypt_json({"users": users}, os.path.join(shared_path, USERS_FILE) if mode == 2 else local_path(USERS_FILE), owner_key)
     else:
-        path = os.path.join(shared_path, USERS_FILE) if mode == 2 else USERS_FILE
+        path = os.path.join(shared_path, USERS_FILE) if mode == 2 else local_path(USERS_FILE)
         if not os.path.exists(path):
             encrypt_json({"users": users}, path, owner_key)
 
-    allow_path = os.path.join(shared_path, RULES_ALLOW_FILE) if mode == 2 else RULES_ALLOW_FILE
-    block_path = os.path.join(shared_path, RULES_BLOCK_FILE) if mode == 2 else RULES_BLOCK_FILE
+    allow_path = os.path.join(shared_path, RULES_ALLOW_FILE) if mode == 2 else local_path(RULES_ALLOW_FILE)
+    block_path = os.path.join(shared_path, RULES_BLOCK_FILE) if mode == 2 else local_path(RULES_BLOCK_FILE)
     if is_owner:
         encrypt_json([], allow_path, owner_key)
         encrypt_json([], block_path, owner_key)
@@ -184,12 +192,14 @@ def initial_setup() -> dict:
             if not os.path.exists(p):
                 encrypt_json([], p, owner_key)
 
-    encrypt_json([], LOG_FILE, key)
+    encrypt_json([], local_path(LOG_FILE), key)
+    encrypt_json([], local_path(TRAFFIC_LOG), key)
 
-    if not os.path.exists(TEST_DIR):
-        os.makedirs(TEST_DIR, exist_ok=True)
+    test_path = local_path(TEST_DIR)
+    if not os.path.exists(test_path):
+        os.makedirs(test_path, exist_ok=True)
         try:
-            os.chmod(TEST_DIR, 0o700)
+            os.chmod(test_path, 0o700)
         except Exception:
             pass
 
@@ -198,12 +208,12 @@ def initial_setup() -> dict:
 
 def load_config() -> dict:
     key = derive_key(generate_machine_id())
-    return decrypt_json(CONFIG_FILE, key)
+    return decrypt_json(local_path(CONFIG_FILE), key)
 
 
 def save_config(cfg: dict) -> None:
     key = derive_key(generate_machine_id())
-    encrypt_json(cfg, CONFIG_FILE, key)
+    encrypt_json(cfg, local_path(CONFIG_FILE), key)
 
 
 def load_users() -> list:
@@ -298,6 +308,19 @@ def load_rules() -> list:
     key = derive_key(cfg.get("owner_id", generate_machine_id()))
     allow_rules = decrypt_json(data_path(RULES_ALLOW_FILE, cfg), key)
     block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
+    now = time.time()
+    changed = False
+    for r in allow_rules[:]:
+        if r.get("expires") and now > r["expires"]:
+            allow_rules.remove(r)
+            changed = True
+    for r in block_rules[:]:
+        if r.get("expires") and now > r["expires"]:
+            block_rules.remove(r)
+            changed = True
+    if changed:
+        encrypt_json(allow_rules, data_path(RULES_ALLOW_FILE, cfg), key)
+        encrypt_json(block_rules, data_path(RULES_BLOCK_FILE, cfg), key)
     return allow_rules + block_rules
 
 
@@ -306,6 +329,26 @@ def save_rules(allow_rules: list, block_rules: list) -> None:
     key = derive_key(cfg.get("owner_id", generate_machine_id()))
     encrypt_json(allow_rules, data_path(RULES_ALLOW_FILE, cfg), key)
     encrypt_json(block_rules, data_path(RULES_BLOCK_FILE, cfg), key)
+
+
+def add_timed_block(ip: str, duration: int = 3600) -> None:
+    """Add a temporary block rule for the given destination IP."""
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    allow_rules = decrypt_json(data_path(RULES_ALLOW_FILE, cfg), key)
+    block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
+    rule = {
+        "action": "block",
+        "direction": "outbound",
+        "protocol": "ANY",
+        "src_ip": "ANY",
+        "src_port": "ANY",
+        "dst_ip": ip,
+        "dst_port": "ANY",
+        "expires": time.time() + duration,
+    }
+    block_rules.append(rule)
+    save_rules(allow_rules, block_rules)
 
 
 def get_protocol(pkt):
@@ -396,21 +439,51 @@ def log_blocked(pkt):
 
     cfg = load_config()
     key = derive_key(cfg.get("owner_id", generate_machine_id()))
-    logs = decrypt_json(LOG_FILE, key)
+    logs = decrypt_json(local_path(LOG_FILE), key)
     if not isinstance(logs, list):
         logs = []
     logs.append(line.strip())
-    encrypt_json(logs, LOG_FILE, key)
-    update_integrity(LOG_FILE)
+    encrypt_json(logs, local_path(LOG_FILE), key)
+    update_integrity(local_path(LOG_FILE))
+    log_traffic(pkt, "BLOCKED")
+
+
+def log_traffic(pkt, action: str) -> None:
+    """Log every packet with ALLOWED or BLOCKED status."""
+    proto = get_protocol(pkt)
+    if proto == "TCP":
+        src_port = pkt.tcp.src_port
+        dst_port = pkt.tcp.dst_port
+    elif proto == "UDP":
+        src_port = pkt.udp.src_port
+        dst_port = pkt.udp.dst_port
+    else:
+        src_port = 0
+        dst_port = 0
+
+    now = datetime.now().astimezone()
+    line = (
+        f"{now:%Y-%m-%d %H:%M:%S %z} "
+        f"{action} {proto} {pkt.src_addr}:{src_port} -> {pkt.dst_addr}:{dst_port}"
+    )
+
+    cfg = load_config()
+    key = derive_key(cfg.get("owner_id", generate_machine_id()))
+    logs = decrypt_json(local_path(TRAFFIC_LOG), key)
+    if not isinstance(logs, list):
+        logs = []
+    logs.append(line)
+    encrypt_json(logs, local_path(TRAFFIC_LOG), key)
+    update_integrity(local_path(TRAFFIC_LOG))
 
 
 def log_disabled(username: str) -> None:
     """Append a timestamped entry to disable_log.txt with the given username."""
     now = datetime.now().astimezone()
     entry = f"{now:%Y-%m-%d %H:%M:%S %z} DISABLED_BY {username}\n"
-    with open(DISABLE_LOG, "a", encoding="utf-8", errors="ignore") as f:
+    with open(local_path(DISABLE_LOG), "a", encoding="utf-8", errors="ignore") as f:
         f.write(entry)
-    update_integrity(DISABLE_LOG)
+    update_integrity(local_path(DISABLE_LOG))
 
 
 def get_local_ip() -> str:
@@ -428,9 +501,9 @@ def log_wrong_password(username: str) -> None:
     now = datetime.now().astimezone()
     ip = get_local_ip()
     entry = f"{now:%Y-%m-%d %H:%M:%S %z} WRONG_PW {username} {ip}\n"
-    with open(WRONG_PW_LOG, "a", encoding="utf-8", errors="ignore") as f:
+    with open(local_path(WRONG_PW_LOG), "a", encoding="utf-8", errors="ignore") as f:
         f.write(entry)
-    update_integrity(WRONG_PW_LOG)
+    update_integrity(local_path(WRONG_PW_LOG))
 
 
 def file_sha256(path: str) -> str:
@@ -446,22 +519,24 @@ def file_sha256(path: str) -> str:
 
 def update_integrity(path: str) -> None:
     hashes = {}
-    if os.path.exists(INTEGRITY_FILE):
+    integ_path = local_path(INTEGRITY_FILE)
+    if os.path.exists(integ_path):
         try:
-            with open(INTEGRITY_FILE, "r", encoding="utf-8") as f:
+            with open(integ_path, "r", encoding="utf-8") as f:
                 hashes = json.load(f)
         except Exception:
             hashes = {}
     hashes[path] = file_sha256(path)
-    with open(INTEGRITY_FILE, "w", encoding="utf-8") as f:
+    with open(integ_path, "w", encoding="utf-8") as f:
         json.dump(hashes, f)
 
 
 def check_integrity() -> None:
-    if not os.path.exists(INTEGRITY_FILE):
+    integ_path = local_path(INTEGRITY_FILE)
+    if not os.path.exists(integ_path):
         return
     try:
-        with open(INTEGRITY_FILE, "r", encoding="utf-8") as f:
+        with open(integ_path, "r", encoding="utf-8") as f:
             hashes = json.load(f)
     except Exception:
         hashes = {}
@@ -471,9 +546,9 @@ def check_integrity() -> None:
             if old and new != old:
                 now = datetime.now().astimezone()
                 entry = f"{now:%Y-%m-%d %H:%M:%S %z} TAMPER_DETECTED {p}\n"
-                with open(TAMPER_LOG, "a", encoding="utf-8", errors="ignore") as tf:
+                with open(local_path(TAMPER_LOG), "a", encoding="utf-8", errors="ignore") as tf:
                     tf.write(entry)
-    for p in [LOG_FILE, DISABLE_LOG, WRONG_PW_LOG]:
+    for p in [local_path(LOG_FILE), local_path(TRAFFIC_LOG), local_path(DISABLE_LOG), local_path(WRONG_PW_LOG)]:
         if os.path.exists(p):
             update_integrity(p)
 
@@ -481,7 +556,7 @@ def check_integrity() -> None:
 def setup_autostart():
     """Create a Windows scheduled task to launch this script on startup."""
     task_name = "WinFirewall"
-    script_path = os.path.abspath(__file__)
+    script_path = local_path(os.path.basename(__file__))
     pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
 
     # Check if the task already exists
@@ -505,11 +580,12 @@ def setup_autostart():
         "ONSTART",
         "/RL",
         "HIGHEST",
+        "/F",
         "/TN",
         task_name,
         "/TR",
         f'"{pythonw}" "{script_path}"',
-    ])
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def monitor_autostart(interval=60):
@@ -605,6 +681,8 @@ def firewall_loop():
                         continue
                     else:
                         w.send(pkt)
+                        log_traffic(pkt, "ALLOWED")
+                        print(f"ALLOWED {pkt.src_addr}->{pkt.dst_addr}")
         except Exception as e:
             print(f"[!] Firewall error: {e}; restarting...")
             time.sleep(1)
@@ -687,11 +765,16 @@ def main():
             print("[!] Invalid credentials; firewall remains active.")
         return
 
-    if not os.path.exists(LOG_FILE):
-        encrypt_json([], LOG_FILE, derive_key(generate_machine_id()))
-    update_integrity(LOG_FILE)
-    update_integrity(DISABLE_LOG)
-    update_integrity(WRONG_PW_LOG)
+    log_path = local_path(LOG_FILE)
+    if not os.path.exists(log_path):
+        encrypt_json([], log_path, derive_key(generate_machine_id()))
+    tlog_path = local_path(TRAFFIC_LOG)
+    if not os.path.exists(tlog_path):
+        encrypt_json([], tlog_path, derive_key(generate_machine_id()))
+    update_integrity(log_path)
+    update_integrity(tlog_path)
+    update_integrity(local_path(DISABLE_LOG))
+    update_integrity(local_path(WRONG_PW_LOG))
 
     setup_autostart()
     threading.Thread(target=monitor_autostart, daemon=True).start()

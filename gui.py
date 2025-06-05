@@ -1,5 +1,7 @@
 import json
 import os
+import time
+from datetime import datetime
 import PySimpleGUI as sg
 from main import (
     prompt_user,
@@ -10,12 +12,16 @@ from main import (
     derive_key,
     encrypt_json,
     decrypt_json,
+    data_path,
+    local_path,
     RULES_ALLOW_FILE,
     RULES_BLOCK_FILE,
     LOG_FILE,
     DISABLE_LOG,
     TAMPER_LOG,
     WRONG_PW_LOG,
+    TRAFFIC_LOG,
+    add_timed_block,
 )
 
 
@@ -25,9 +31,16 @@ def rule_to_display(rule):
     Convert rule dict to a readable string for the listbox, e.g.:
     [BLOCK][outbound][TCP][ANY:ANY → 8.8.8.8:53]
     """
-    return f"[{rule['action'].upper()}][{rule['direction']}][{rule['protocol']}][{rule['src_ip']}:{rule['src_port']} → {rule['dst_ip']}:{rule['dst_port']}]"
+    exp = ""
+    if rule.get("expires"):
+        exp_time = datetime.fromtimestamp(rule["expires"]).strftime("%H:%M")
+        exp = f" until {exp_time}"
+    return (
+        f"[{rule['action'].upper()}][{rule['direction']}][{rule['src_ip']} -> {rule['dst_ip']}]" + exp
+    )
 
 def read_log_lines(path, limit=200, sanitized=False):
+    path = local_path(path)
     if not os.path.exists(path):
         return []
     if path.endswith(".enc"):
@@ -70,9 +83,9 @@ def build_rule_tab(rules, level):
                 [
                     [sg.Text("Action"), sg.Combo(actions, default_value=actions[0], key="-ACTION-")],
                     [sg.Text("Direction"), sg.Combo(["outbound", "inbound"], default_value="outbound", key="-DIRECTION-")],
-                    [sg.Text("Protocol"), sg.Combo(["TCP", "UDP", "ANY"], default_value="ANY", key="-PROTOCOL-")],
-                    [sg.Text("Src IP"), sg.Input("ANY", size=(15, 1), key="-SRC IP-"), sg.Text("Src Port"), sg.Input("ANY", size=(5, 1), key="-SRC PORT-")],
-                    [sg.Text("Dst IP"), sg.Input("ANY", size=(15, 1), key="-DST IP-"), sg.Text("Dst Port"), sg.Input("ANY", size=(5, 1), key="-DST PORT-")],
+                    [sg.Text("Src IP"), sg.Input("ANY", size=(15, 1), key="-SRC IP-")],
+                    [sg.Text("Dst IP"), sg.Input("ANY", size=(15, 1), key="-DST IP-")],
+                    [sg.Text("Expires (min)"), sg.Input("", size=(5,1), key="-EXPIRES-")],
                     [sg.Button("Add Rule", key="-ADD-"), sg.Button("Delete Selected", key="-DEL-")],
                 ],
             )]
@@ -88,6 +101,9 @@ def build_log_tab(title, path, sanitized=False):
         for i, line in enumerate(lines)
         if title == "Firewall Logs" and is_unusual(line)
     ]
+    buttons = [sg.Button("Refresh", key=f"-REFRESH-{title}-")]
+    if title == "Traffic":
+        buttons.append(sg.Button("Block 1h", key="-BLOCK1H-"))
     tab_layout = [
         [
             sg.Table(
@@ -100,9 +116,10 @@ def build_log_tab(title, path, sanitized=False):
                 justification="left",
                 expand_x=True,
                 expand_y=True,
+                enable_events=True,
             )
         ],
-        [sg.Button("Refresh", key=f"-REFRESH-{title}-")],
+        buttons,
     ]
     return sg.Tab(title, tab_layout)
 
@@ -116,7 +133,7 @@ def main():
         "SCROLL": "#1A1A1A",
         "BUTTON": ("white", "#004080"),
         "PROGRESS": "#01826B",
-        "BORDER": "#004080",
+        "BORDER": 1,
         "SLIDER_DEPTH": 0,
         "PROGRESS_DEPTH": 0,
     }
@@ -135,7 +152,7 @@ def main():
     block_rules = decrypt_json(data_path(RULES_BLOCK_FILE, cfg), key)
     rules = allow_rules + block_rules
     sanitized_view = level >= 2
-    tabs = [build_log_tab("Firewall Logs", LOG_FILE, sanitized=sanitized_view)]
+    tabs = [build_log_tab("Traffic", TRAFFIC_LOG), build_log_tab("Firewall Logs", LOG_FILE, sanitized=sanitized_view)]
 
     rule_tab = build_rule_tab(rules, level)
     if rule_tab:
@@ -170,15 +187,25 @@ def main():
             if level == 3 and values["-ACTION-"] != "block":
                 sg.popup("Level 3 may only add block rules")
                 continue
+            expires = values["-EXPIRES-"]
+            exp_ts = None
+            if expires:
+                try:
+                    exp_ts = time.time() + int(expires) * 60
+                except ValueError:
+                    sg.popup("Invalid expiration")
+                    continue
             new_rule = {
                 "action": values["-ACTION-"],
                 "direction": values["-DIRECTION-"],
-                "protocol": values["-PROTOCOL-"],
+                "protocol": "ANY",
                 "src_ip": values["-SRC IP-"].strip() or "ANY",
-                "src_port": values["-SRC PORT-"].strip() or "ANY",
+                "src_port": "ANY",
                 "dst_ip": values["-DST IP-"].strip() or "ANY",
-                "dst_port": values["-DST PORT-"].strip() or "ANY",
+                "dst_port": "ANY",
             }
+            if exp_ts:
+                new_rule["expires"] = exp_ts
             rules.append(new_rule)
             if new_rule["action"] == "allow":
                 allow_rules.append(new_rule)
@@ -206,6 +233,9 @@ def main():
 
         elif event.startswith("-REFRESH-"):
             tab_title = event.replace("-REFRESH-", "")
+            if tab_title == "Traffic":
+                data = [[l] for l in read_log_lines(TRAFFIC_LOG)]
+                window["-TABLE-Traffic-"].update(values=data)
             if tab_title == "Firewall Logs":
                 lines = read_log_lines(LOG_FILE, sanitized=sanitized_view)
                 data = [[l] for l in lines]
@@ -224,6 +254,16 @@ def main():
             elif tab_title == "Wrong Passwords":
                 data = [[l] for l in read_log_lines(WRONG_PW_LOG)]
                 window["-TABLE-Wrong Passwords-"].update(values=data)
+
+        elif event == "-BLOCK1H-":
+            selected = values.get("-TABLE-Traffic-")
+            if selected:
+                line = selected[0]
+                parts = line.split()
+                if len(parts) >= 6:
+                    dst = parts[5].split(':')[0]
+                    add_timed_block(dst, 3600)
+                    sg.popup(f"Blocking {dst} for 1 hour")
 
     window.close()
 
