@@ -10,6 +10,7 @@ A lightweight, Python-based personal firewall for Windows that uses WinDivert to
 - Windows 10/11 (x64)
 - Administrator privileges (firewall engine must run as Admin)
 - Python 3.8+ installed and on PATH
+- A free VirusTotal API key set in the `VT_API_KEY` environment variable to enable AI threat detection (optional)
 
 ---
 
@@ -94,14 +95,27 @@ Unusual entries in the firewall log are highlighted for quick review. Wrong
 password attempts are recorded in `wrong_pw_log.txt` and only visible to level
 1 users. Rule changes update the encrypted rule files automatically.
 
+### Event logging and AI detection
+
+Every connection is recorded to a daily JSON log file named `firewall_events-YYYY-MM-DD.log`.
+Each entry includes the username, process name, destination, detected layer, AI verdict and
+action taken. When a Layer 7 domain is detected the firewall queries VirusTotal (if a
+`VT_API_KEY` is configured). If VirusTotal reports the domain as malicious the connection is
+quarantined for one hour and a bright red alert appears in the GUI.
+
+Logs rotate automatically each day so the files do not grow indefinitely.
+
 ---
 
 ## Notes
 
 - `main.py` and `gui.py` both require administrator privileges so WinDivert can operate. Start *Command Prompt* with **Run as administrator** before launching.
 - `fw_log.txt.enc` will be created in this directory containing encrypted firewall logs.
-- The first run installs a scheduled task named `WinFirewall`. Delete that task via
-  **Task Scheduler** if you no longer want the firewall to start automatically.
+- Each day a JSON log `firewall_events-YYYY-MM-DD.log` records every connection with AI verdicts.
+- The first run installs a scheduled task named `WinFirewall` that runs under
+  the **SYSTEM** account so the firewall starts before any user logs in. Delete
+  that task via **Task Scheduler** if you no longer want the firewall to start
+  automatically.
 - A background monitor recreates the scheduled task if it's removed, helping guard
   against tampering.
 - To disable the firewall and remove the task, run `python main.py --stop`. The
