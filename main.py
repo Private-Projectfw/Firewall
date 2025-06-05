@@ -367,8 +367,6 @@ def add_timed_block(ip: str, duration: int = 3600) -> None:
     }
     block_rules.append(rule)
     save_rules(allow_rules, block_rules)
-
-
 def add_timed_allow(ip: str, duration: int = 3600) -> None:
     """Add a temporary allow rule for the given destination IP."""
     cfg = load_config()
@@ -408,8 +406,6 @@ def add_quarantine(ip: str, duration: int = 3600) -> None:
     }
     block_rules.append(rule)
     save_rules(allow_rules, block_rules)
-
-
 def get_protocol(pkt):
     """
     Return "TCP" if this packet has a TCP header,
@@ -617,7 +613,6 @@ def log_traffic(
     logs.append(line)
     encrypt_json(logs, local_path(TRAFFIC_LOG), key)
     update_integrity(local_path(TRAFFIC_LOG))
-
     event = {
         "timestamp": now.isoformat(),
         "username": user,
@@ -969,6 +964,9 @@ def main():
     ev_path = event_log_path()
     if not os.path.exists(ev_path):
         open(ev_path, "a", encoding="utf-8").close()
+    update_integrity(log_path)
+    update_integrity(tlog_path)
+    update_integrity(ev_path)
     update_integrity(log_path)
     update_integrity(tlog_path)
     update_integrity(ev_path)

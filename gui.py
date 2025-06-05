@@ -287,7 +287,6 @@ def main():
                     dst = parts[5].split(':')[0]
                     add_timed_block(dst, 3600)
                     sg.popup(f"Blocking {dst} for 1 hour")
-
         elif event == "-ALLOW1H-":
             selected = values.get("-TABLE-Traffic-")
             if selected:
